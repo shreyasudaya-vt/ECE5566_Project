@@ -58,6 +58,7 @@ def _update_cubic_states(
 ) -> None:
     bdp = capacity * params.RTT_min
     per_flow_bdp = bdp / params.n_flows
+    cp = params.cubic_params  # Shorthand for CUBIC parameters
 
     for name, burst_aware in (("CUBIC", False), ("Burst-Aware CUBIC", True)):
         state = states[name]
@@ -68,28 +69,42 @@ def _update_cubic_states(
         queuing_delay = state.q / capacity
         effective_rtt = params.RTT_min + queuing_delay
         burst_gradient = (total_rate - capacity) / capacity
-        queue_pressure = min(2.0, queuing_delay / max(params.RTT_min, 1e-9))
 
         next_windows = []
+        queue_pressure = min(2.0, queuing_delay / max(params.RTT_min, 1e-9))
+        
         for window, rate in zip(state.cubic_windows, state.rates):
-            utility_push = grad_U_cubic(rate, alpha) / max(effective_rtt, 1e-9)
-            congestion_price = (
-                params.cubic_queue_price * queue_pressure
-                + params.cubic_burst_price * max(0.0, burst_gradient)
-            )
+            # Gradient of CUBIC utility function: ∂U/∂x = α/(3*x^(2/3))
+            utility_gradient = grad_U_cubic(rate, alpha)
+            normalized_utility = utility_gradient / max(effective_rtt, 1e-9)
+            
+            # Base congestion signal (queue-based, used for all variants)
+            base_congestion = cp.queue_price * queue_pressure
+            
             if burst_aware:
-                congestion_price += params.gamma * grad_penalty_wrt_rate(
-                    burst_gradient, capacity, params.xi, params.kappa
-                )
-            next_window = window + params.lr_cubic * per_flow_bdp * (utility_push - congestion_price)
+                # Burst-aware: Add formal penalty gradient on top of base signal (Eq. 23)
+                # P(d_l, b_l) = ξ*d_l + (κ/2)*max(0, b_l)^2
+                # Apply: γ * ∂P/∂x, but scale up for CUBIC (penalty gradients are very small)
+                penalty_gradient = cp.gamma * grad_penalty_wrt_rate(
+                    burst_gradient, capacity, cp.xi, cp.kappa
+                ) * 50.0  # Balanced scaling for CUBIC
+                congestion_signal = base_congestion + penalty_gradient
+            else:
+                # Standard CUBIC: just use base queue pressure signal
+                congestion_signal = base_congestion
+            
+            # Window update: Δw = lr * bdp * (utility_gradient - congestion_signal)
+            next_window = window + cp.lr * per_flow_bdp * (normalized_utility - congestion_signal)
 
-            if burst_aware:
-                trigger = max(0.0, queue_pressure - 0.8) + max(0.0, burst_gradient - params.tau)
-                if trigger > 0.0:
-                    next_window *= 1.0 - min(0.22, params.mu * trigger)
+            # For burst-aware: apply multiplicative decrease when burst gradient detected
+            if burst_aware and cp.enable_burst_multiplicative_decrease and burst_gradient > cp.tau:
+                # Window reduction proportional to burst intensity (from paper's dynamic constraint)
+                burst_penalty = cp.mu * max(0.0, burst_gradient - cp.tau)
+                next_window *= max(0.5, 1.0 - min(cp.burst_decrease_factor, burst_penalty))
 
+            # Enforce window bounds
             min_window = per_flow_bdp * 0.25
-            max_window = per_flow_bdp * (1.8 if burst_aware else 2.1)
+            max_window = per_flow_bdp * 2.1
             next_windows.append(float(np.clip(next_window, min_window, max_window)))
 
         state.cubic_windows = next_windows
@@ -112,24 +127,26 @@ def _update_bbr_states(
     rtt: float,
     dt: float,
 ) -> None:
+    bp = params.bbr_params  # Shorthand for BBR parameters
+    
     for name, burst_aware in (("BBRv3", False), ("Burst-Aware BBR", True)):
         state = states[name]
         objective_gradient = state.W - bdp
 
         if burst_aware:
-            objective_gradient += params.gamma * grad_penalty_wrt_W(
+            objective_gradient += bp.gamma * grad_penalty_wrt_W(
                 state.W,
                 bdp,
                 capacity,
-                params.xi,
-                params.kappa,
+                bp.xi,
+                bp.kappa,
             )
             burst_gradient = max(0.0, (state.W - bdp) / (bdp + 1e-12))
-            reduction = params.mu * max(0.0, burst_gradient - params.tau) * bdp
+            reduction = bp.mu * max(0.0, burst_gradient - bp.tau) * bdp
             state.W_hi = max(bdp * 0.5, state.W_hi - reduction)
             state.W_hi = min(state.W_hi + 0.01 * bdp, 3.0 * bdp)
 
-        state.W = state.W - params.lr_bbr * objective_gradient + extra_load * dt * 0.08
+        state.W = state.W - bp.lr * objective_gradient + extra_load * dt * 0.08
         window_low = bdp * 0.1
         window_high = state.W_hi if burst_aware else 3.0 * bdp
         state.W = float(np.clip(state.W, window_low, window_high))
@@ -158,7 +175,7 @@ def simulate(
     capacity = params.C
     rtt = params.RTT_min
     bdp = capacity * rtt
-    alpha = params.alpha_cubic / (rtt ** 0.25)
+    alpha = params.cubic_params.alpha / (rtt ** 0.25)
     steps = int(duration / dt)
     times = np.linspace(0.0, duration, steps, endpoint=False)
     states = _build_states(params, bdp)

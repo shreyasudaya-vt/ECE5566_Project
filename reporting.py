@@ -45,10 +45,8 @@ def print_summary(
     print(f"Scenario : {scenario}")
     print(f"Capacity : {params.C} Mbps   Flows/algo : {params.n_flows}")
     print(f"RTT_min  : {params.RTT_min * 1000:.0f} ms   Duration : {duration} s")
-    print(
-        f"kappa={params.kappa}  xi={params.xi}  gamma={params.gamma}  "
-        f"tau={params.tau}  mu={params.mu}"
-    )
+    print(f"CUBIC: γ={params.cubic_params.gamma}, κ={params.cubic_params.kappa}, ξ={params.cubic_params.xi}, τ={params.cubic_params.tau}, μ={params.cubic_params.mu}")
+    print(f"BBR:   γ={params.bbr_params.gamma}, κ={params.bbr_params.kappa}, ξ={params.bbr_params.xi}, τ={params.bbr_params.tau}, μ={params.bbr_params.mu}")
     print(separator)
 
     headers = ["Metric"] + list(stats.keys())

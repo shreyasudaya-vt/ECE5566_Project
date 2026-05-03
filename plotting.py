@@ -256,7 +256,7 @@ def plot_penalty_illustration(params: NetParams, output_dir: str | Path, output_
 
     ax = axes[0]
     for delay_fixed, color in ((0.0, "#185FA5"), (0.02, "#BA7517"), (0.05, "#993556")):
-        values = np.array([penalty(delay_fixed, burst, params.xi, params.kappa) for burst in b_vals])
+        values = np.array([penalty(delay_fixed, burst, params.cubic_params.xi, params.cubic_params.kappa) for burst in b_vals])
         ax.plot(b_vals, values, color=color, lw=1.8, label=f"d_l = {delay_fixed:.2f} s")
     ax.axvline(0, color="gray", ls=":", lw=1, alpha=0.5)
     ax.set_xlabel("Burst gradient b_l", fontsize=10)
@@ -267,7 +267,7 @@ def plot_penalty_illustration(params: NetParams, output_dir: str | Path, output_
     ax3d = fig.add_subplot(1, 2, 2, projection="3d")
     delay_mesh, burst_mesh = np.meshgrid(d_vals, b_vals)
     penalty_mesh = np.vectorize(
-        lambda delay, burst: penalty(delay, burst, params.xi, params.kappa)
+        lambda delay, burst: penalty(delay, burst, params.cubic_params.xi, params.cubic_params.kappa)
     )(delay_mesh, burst_mesh)
     surface = ax3d.plot_surface(delay_mesh, burst_mesh, penalty_mesh, cmap="viridis", alpha=0.85, linewidth=0)
     ax3d.set_xlabel("d_l (s)", fontsize=8)
